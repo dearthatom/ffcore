@@ -10052,6 +10052,130 @@ int mongodb_process_wx_tcp_pay_open( char *money,char *park_id,char * box_ip,cha
     
     //return mogodbb_process_wx_udp_send(send, host_server_ip, PORT_UDP_BCENTER_TO_ONCALLCLIENT);
     mogodbb_process_wx_tcp_send(send, sock);
+
+
+
+
+    //add 10.26
+    //add 10.26
+
+    //  mongoc_client_t *mongodb_client;
+    mongoc_collection_t *mongodb_table_channel;	//channel表
+    mongoc_collection_t *mongodb_table_caroutrec;	//device表
+    //   mongodb_client = mongoc_client_new(str_con);
+    mongodb_table_channel = mongoc_client_get_collection(mongodb_client,"boondb","channel");   //channel表
+    mongodb_table_caroutrec = mongoc_client_get_collection(mongodb_client,"boondb","caroutrec");   //device表
+
+    const bson_t *bson_t_tmp1;
+
+    char pay_charge[24] = {0};
+
+    query = bson_new();
+    BSON_APPEND_UTF8(query, "caroutrec_out_time",out_time);
+    BSON_APPEND_UTF8(query, "caroutrec_plate_id",plate);
+
+    snprintf(log_buf_, sizeof(log_buf_), "[%s] 准备查询caroutrec表 查询条件caroutrec_out_time[%s] caroutrec_plate_id[%s] line[%d]",
+             __FUNCTION__, out_time, plate, __LINE__);
+    writelog(log_buf_);
+
+    cursor = mongoc_collection_find(mongodb_table_caroutrec, MONGOC_QUERY_NONE, 0, 0, 0, query, NULL, NULL);
+    if(mongoc_cursor_error(cursor,&error))
+    {
+        bson_destroy(query);
+        mongoc_cursor_destroy(cursor);
+        fprintf(fp_log,"%s##mongodb_send_bgui_start 失败\n",time_now);
+
+        snprintf(log_buf_, sizeof(log_buf_), "[%s] error! 查找caroutrec表 操作数据库失败 line[%d]", __FUNCTION__, __LINE__);
+        writelog(log_buf_);
+
+        return -1;
+    }
+
+    bool find_value = false; // 是否找到数据
+    int index_count = 1;
+    while(!mongoc_cursor_error(cursor,&error) && mongoc_cursor_more(cursor))  // modify
+    {
+        snprintf(log_buf_, sizeof(log_buf_), "[%s] 查找caroutrec表 存在[%d]个记录 line[%d]", __FUNCTION__, index_count++, __LINE__);
+        writelog(log_buf_);
+
+        if(mongoc_cursor_next(cursor, &bson_t_tmp1))
+        {
+            bson_copy_to(bson_t_tmp1, &result); //得到一条完整的记录
+            if (bson_iter_init(&iter, &result) &&bson_iter_find(&iter, "caroutrec_pay_charge"))
+            {
+                tmp = bson_iter_utf8(&iter,&length);
+                memcpy(pay_charge,tmp,length);
+
+                find_value = true; // 已经找到数据
+
+                snprintf(log_buf_, sizeof(log_buf_), "[%s] 查找caroutrec表 找到第[%d]个caroutrec_pay_charge[%s] line[%d]", __FUNCTION__, index_count++, pay_charge, __LINE__);
+                writelog(log_buf_);
+            }
+            bson_destroy(&result);
+        }
+    }
+    bson_destroy(query);
+    mongoc_cursor_destroy(cursor);
+
+    //
+    if(strlen(pay_charge) <= 0){
+        snprintf(log_buf_, sizeof(log_buf_), "[%s] error! 查询caroutrec表 查询caroutrec_pay_charge字段为空 是否找到数据find_value[%d] 查询条件caroutrec_out_time[%s] caroutrec_plate_id[%s] line[%d]",
+                 __FUNCTION__, find_value, out_time, plate, __LINE__);
+        writelog(log_buf_);
+    } else{
+        snprintf(log_buf_, sizeof(log_buf_), "[%s] 查询caroutrec表 找到caroutrec_pay_charge[%s] 车牌号[%s] 离开时间[%s] 应收金额[%s]元 把收费类型改为移动支付, 把实收金额改为[%s]元 line[%d]",
+                 __FUNCTION__, pay_charge, plate, out_time, pay_charge, money, __LINE__);
+        writelog(log_buf_);
+    }
+
+    fprintf(fp_log,"%s##更新caroutrec表，车牌号%s,离开时间 %s,应收金额%s元，把收费类型改为移动支付，把实收金额改为%s元\n",time_now,plate,out_time,pay_charge,money);
+    query = bson_new();
+    bson_t *result1 = bson_new();
+    BSON_APPEND_UTF8(query, "caroutrec_out_time",out_time);
+    BSON_APPEND_UTF8(query, "caroutrec_plate_id",plate);
+    result1 = BCON_NEW ("$set", "{", "caroutrec_charge_type", BCON_UTF8 ("移动支付"),"updated", BCON_BOOL (true) ,"}");
+    bool update_ret = mongoc_collection_update(mongodb_table_caroutrec,MONGOC_UPDATE_NONE,query,result1,NULL,&error); //更新car表里的车辆剩余时间
+    bson_destroy(query);
+    bson_destroy(result1);
+    if(!update_ret){
+        snprintf(log_buf_, sizeof(log_buf_), "[%s] error! 更新caroutrec表失败 车牌号caroutrec_plate_id[%s] 离开时间caroutrec_out_time[%s] 收费方式:移动支付 line[%d]",
+                 __FUNCTION__, plate, out_time, __LINE__);
+        writelog(log_buf_);
+    }
+
+    query = bson_new();
+    result1 = bson_new();
+    BSON_APPEND_UTF8(query, "caroutrec_out_time",out_time);
+    BSON_APPEND_UTF8(query, "caroutrec_plate_id",plate);
+    result1 = BCON_NEW ("$set", "{", "caroutrec_real_charge", BCON_UTF8 (money),"updated", BCON_BOOL (true) ,"}");
+    update_ret = mongoc_collection_update(mongodb_table_caroutrec,MONGOC_UPDATE_NONE,query,result1,NULL,&error); //更新car表里的车辆剩余时间
+    bson_destroy(query);
+    bson_destroy(result1);
+    if(!update_ret){
+        snprintf(log_buf_, sizeof(log_buf_), "[%s] error! 更新caroutrec表失败 车牌号caroutrec_plate_id[%s] 离开时间caroutrec_out_time[%s] 收费金额[%s] line[%d]",
+                 __FUNCTION__, plate, out_time, money, __LINE__);
+        writelog(log_buf_);
+    }
+
+    query = bson_new();
+    result1 = bson_new();
+    BSON_APPEND_UTF8(query, "caroutrec_out_time",out_time);
+    BSON_APPEND_UTF8(query, "caroutrec_plate_id",plate);
+    result1 = BCON_NEW ("$set", "{", "caroutrec_open_door_type", BCON_UTF8 ("移动支付"),"updated", BCON_BOOL (true) ,"}");
+    update_ret = mongoc_collection_update(mongodb_table_caroutrec,MONGOC_UPDATE_NONE,query,result1,NULL,&error); //更新car表里的车辆剩余时间
+    bson_destroy(query);
+    bson_destroy(result1);
+    if(!update_ret){
+        snprintf(log_buf_, sizeof(log_buf_), "[%s] error! 更新caroutrec表失败 车牌号caroutrec_plate_id[%s] 离开时间caroutrec_out_time[%s] 放行方式：移动支付 line[%d]",
+                 __FUNCTION__, plate, out_time, __LINE__);
+        writelog(log_buf_);
+    }
+
+
+
+    mongodb_delete_car_inpark(plate,park_id);
+    mongoc_collection_destroy(mongodb_table_channel);
+    mongoc_collection_destroy(mongodb_table_caroutrec);
     return 0;
 }
 /**
